@@ -1,0 +1,21 @@
+@use "mana-font/sass/variables";
+@use "mana-font/sass/core";
+@use "mana-font/sass/icons";
+@use "mana-font/sass/cost";
+@use "mana-font/sass/loyalty";
+@use "mana-font/sass/dfc";
+@use "mana-font/sass/sizes";
+@use "mana-font/sass/duo";
+@use "mana-font/sass/colors";
+@use "mana-font/sass/extras";
+@use "mana-font/sass/aliases";
+
+@font-face {
+  font-family: "Mana";
+  src:
+    url("mana-font/fonts/mana.woff2") format("woff2"),
+    url("mana-font/fonts/mana.woff") format("woff"),
+    url("mana-font/fonts/mana.ttf") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+}
