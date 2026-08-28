@@ -174,8 +174,6 @@ describe('ScryfallClient.lookupCards - batched exact-match lookup', () => {
         not_found: [],
       });
     });
-    const client = new ScryfallClient({ fetchFn });
-
     const combined = await new ScryfallClient({ fetchFn }).lookupCards([
       'Esper Origins // Summon: Esper Maduin',
     ]);
