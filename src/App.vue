@@ -21,6 +21,7 @@ const coloredBorders = ref(false);
 const small = ref(false);
 const fullArtLands = ref(false);
 const ignoreLands = ref(false);
+const generateTokens = ref(false);
 const pageFormat = ref<PageFormat>('letter');
 const noCardSpace = ref(true);
 
@@ -108,7 +109,9 @@ async function generateAndDownload(): Promise<void> {
 
     statusMessage.value = 'Looking up card data on Scryfall…';
     const client = new ScryfallClient();
-    const resolveResult = await resolveDecklist(parseResult.entries, client);
+    const resolveResult = await resolveDecklist(parseResult.entries, client, {
+      generateTokens: generateTokens.value,
+    });
 
     const summary = summarizePipelineErrors(parseResult, resolveResult);
     errorSummary.value = summary;
@@ -197,7 +200,8 @@ async function generateAndDownload(): Promise<void> {
         <label><input v-model="coloredBorders" type="checkbox" /> Color borders</label><br />
         <label><input v-model="small" type="checkbox" /> Small card size</label><br />
         <label><input v-model="fullArtLands" type="checkbox" /> Blank basic lands (draw your own!)</label><br />
-        <label><input v-model="ignoreLands" type="checkbox" /> Ignore basic lands</label>
+        <label><input v-model="ignoreLands" type="checkbox" /> Ignore basic lands</label><br />
+        <label><input v-model="generateTokens" type="checkbox" /> Generate tokens</label>
       </fieldset>
 
       <fieldset class="body-text options-fieldset">

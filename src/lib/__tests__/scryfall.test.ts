@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DecklistEntry } from '../decklist';
-import { ScryfallClient, resolveDecklist, type FetchLike } from '../scryfall';
+import { ScryfallClient, resolveDecklist, deriveTokens, type FetchLike, type ScryfallCard } from '../scryfall';
 
 function cardEntry(name: string, line = 1): DecklistEntry {
   return { kind: 'card', quantity: 1, name, line };
@@ -231,6 +231,301 @@ describe('ScryfallClient.lookupCards - batched exact-match lookup', () => {
     const clientTwo = new ScryfallClient({ fetchFn });
     const frontOnly = await clientTwo.lookupCards(['Brazen Borrower']);
     expect(frontOnly.found.get('brazen borrower')?.name).toBe('Brazen Borrower // Petty Theft');
+  });
+});
+
+describe('ScryfallClient.lookupByIds - id-based batched lookup', () => {
+  it('sends id-based identifiers and batches them the same way as name-based ones', async () => {
+    const ids = Array.from({ length: 130 }, (_, i) => `id-${i}`);
+    const requestSizes: number[] = [];
+    const fetchFn = vi.fn<FetchLike>(async (url, init) => {
+      expect(url).toBe('https://api.scryfall.com/cards/collection');
+      expect(init?.method).toBe('POST');
+      const body = JSON.parse(init!.body!) as { identifiers: Array<{ id: string }> };
+      requestSizes.push(body.identifiers.length);
+      expect(body.identifiers.every((identifier) => 'id' in identifier)).toBe(true);
+      return jsonResponse(200, {
+        data: body.identifiers.map((identifier) => collectionCardBody(identifier.id, { id: identifier.id })),
+        not_found: [],
+      });
+    });
+    const client = new ScryfallClient({ fetchFn });
+
+    const cards = await client.lookupByIds(ids);
+
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(requestSizes).toEqual([75, 55]);
+    expect(cards).toHaveLength(130);
+  });
+});
+
+function cardWithParts(name: string, parts: Array<{ id: string; component: string; name: string }>): ScryfallCard {
+  return {
+    name,
+    type_line: 'Creature',
+    color_identity: [],
+    layout: 'normal',
+    all_parts: parts.map((p) => ({ ...p, type_line: 'Token Creature', uri: `https://api.scryfall.com/cards/${p.id}` })),
+  };
+}
+
+describe('deriveTokens - token derivation from all_parts', () => {
+  it('hydrates token ids referenced by a card and includes them in the derived set', async () => {
+    const source = cardWithParts('Chatterfang, Squirrel General', [
+      { id: 'tok-1', component: 'token', name: 'Squirrel' },
+      { id: 'tok-2', component: 'token', name: 'Food' },
+    ]);
+    const fetchFn = vi.fn<FetchLike>(async (_url, init) => {
+      const body = JSON.parse(init!.body!) as { identifiers: Array<{ id: string }> };
+      return jsonResponse(200, {
+        data: body.identifiers.map((id) =>
+          collectionCardBody(id.id === 'tok-1' ? 'Squirrel' : 'Food', { id: id.id, oracle_id: `oracle-${id.id}` }),
+        ),
+        not_found: [],
+      });
+    });
+    const client = new ScryfallClient({ fetchFn });
+
+    const derived = await deriveTokens([source], client);
+
+    expect(derived.map((c) => c.name).sort()).toEqual(['Food', 'Squirrel']);
+  });
+
+  it('deduplicates hydrated tokens by oracle_id, keeping the first occurrence', async () => {
+    const cardA = cardWithParts('Elspeth, Sun\'s Champion', [
+      { id: 'soldier-print-a', component: 'token', name: 'Soldier' },
+    ]);
+    const cardB = cardWithParts('Raise the Alarm', [
+      { id: 'soldier-print-b', component: 'token', name: 'Soldier' },
+    ]);
+    const fetchFn = vi.fn<FetchLike>(async (_url, init) => {
+      const body = JSON.parse(init!.body!) as { identifiers: Array<{ id: string }> };
+      return jsonResponse(200, {
+        data: body.identifiers.map((id) =>
+          collectionCardBody('Soldier', { id: id.id, oracle_id: 'oracle-soldier' }),
+        ),
+        not_found: [],
+      });
+    });
+    const client = new ScryfallClient({ fetchFn });
+
+    const derived = await deriveTokens([cardA, cardB], client);
+
+    expect(derived).toHaveLength(1);
+    expect(derived[0].name).toBe('Soldier');
+  });
+
+  it('contributes nothing for a card with no token relationships or only non-token all_parts', async () => {
+    const noParts: ScryfallCard = { name: 'Lightning Bolt', type_line: 'Instant', color_identity: [], layout: 'normal' };
+    const comboOnly = cardWithParts('Some Card', [{ id: 'combo-1', component: 'combo_piece', name: 'Other Card' }]);
+    const fetchFn = vi.fn<FetchLike>(async () => jsonResponse(200, { data: [], not_found: [] }));
+    const client = new ScryfallClient({ fetchFn });
+
+    const derived = await deriveTokens([noParts, comboOnly], client);
+
+    expect(derived).toEqual([]);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveDecklist - token generation end-to-end', () => {
+  it('adds one derived token to the resolved set when generation is enabled and no manual line matches', async () => {
+    const fetchFn = vi.fn<FetchLike>(async (url, init) => {
+      if (init?.method === 'POST') {
+        const body = JSON.parse(init.body!) as { identifiers: Array<{ name?: string; id?: string }> };
+        if (body.identifiers[0].name) {
+          return jsonResponse(200, {
+            data: [
+              cardWithParts('Chatterfang, Squirrel General', [
+                { id: 'tok-1', component: 'token', name: 'Squirrel' },
+              ]),
+            ],
+            not_found: [],
+          });
+        }
+        return jsonResponse(200, {
+          data: [collectionCardBody('Squirrel', { id: 'tok-1', oracle_id: 'oracle-squirrel' })],
+          not_found: [],
+        });
+      }
+      throw new Error(`unexpected search request: ${url}`);
+    });
+    const client = new ScryfallClient({ fetchFn });
+
+    const { resolved } = await resolveDecklist(
+      [cardEntry('Chatterfang, Squirrel General')],
+      client,
+      { generateTokens: true },
+    );
+
+    const tokenEntries = resolved.filter((r) => r.entry.kind === 'token');
+    expect(tokenEntries).toHaveLength(1);
+    expect(tokenEntries[0].card.name).toBe('Squirrel');
+    expect(tokenEntries[0].entry.quantity).toBe(1);
+  });
+
+  it('replaces the derived quantity with the manual line quantity when a manual token line matches', async () => {
+    const fetchFn = vi.fn<FetchLike>(async (_url, init) => {
+      const body = JSON.parse(init!.body!) as { identifiers: Array<{ name?: string; id?: string }> };
+      if (body.identifiers[0].name) {
+        return jsonResponse(200, {
+          data: [
+            cardWithParts('Chatterfang, Squirrel General', [
+              { id: 'tok-1', component: 'token', name: 'Squirrel' },
+            ]),
+          ],
+          not_found: [],
+        });
+      }
+      return jsonResponse(200, {
+        data: [collectionCardBody('Squirrel', { id: 'tok-1', oracle_id: 'oracle-squirrel' })],
+        not_found: [],
+      });
+    });
+    const client = new ScryfallClient({ fetchFn });
+
+    const { resolved } = await resolveDecklist(
+      [cardEntry('Chatterfang, Squirrel General'), { ...tokenEntry('Squirrel'), quantity: 2 }],
+      client,
+      { generateTokens: true },
+    );
+
+    const tokenEntries = resolved.filter((r) => r.entry.kind === 'token');
+    expect(tokenEntries).toHaveLength(1);
+    expect(tokenEntries[0].entry.quantity).toBe(2);
+  });
+
+  it('adds no derived tokens when generation is disabled, regardless of all_parts data', async () => {
+    const fetchFn = vi.fn<FetchLike>(async () => {
+      return jsonResponse(200, {
+        data: [
+          cardWithParts('Chatterfang, Squirrel General', [
+            { id: 'tok-1', component: 'token', name: 'Squirrel' },
+          ]),
+        ],
+        not_found: [],
+      });
+    });
+    const client = new ScryfallClient({ fetchFn });
+
+    const { resolved } = await resolveDecklist([cardEntry('Chatterfang, Squirrel General')], client);
+
+    expect(resolved.filter((r) => r.entry.kind === 'token')).toHaveLength(0);
+  });
+});
+
+describe('resolveDecklist - manual token line resolution against the derived set', () => {
+  function derivedSetup(matchingCard: ScryfallCard) {
+    return vi.fn<FetchLike>(async (_url, init) => {
+      if (init?.method === 'POST') {
+        const body = JSON.parse(init.body!) as { identifiers: Array<{ name?: string; id?: string }> };
+        if (body.identifiers[0].name) {
+          return jsonResponse(200, {
+            data: [
+              cardWithParts('Source Card', [{ id: 'tok-1', component: 'token', name: 'Bird' }]),
+            ],
+            not_found: [],
+          });
+        }
+        return jsonResponse(200, { data: [matchingCard], not_found: [] });
+      }
+      return jsonResponse(200, {
+        data: [collectionCardBody('Bird', { id: 'search-fallback', type_line: 'Token Creature — Bird', layout: 'token' })],
+      });
+    });
+  }
+
+  it('falls through to Scryfall when there is no derived set at all', async () => {
+    const fetchFn = vi.fn<FetchLike>(async (url, init) => {
+      if (init?.method === 'POST') {
+        const body = JSON.parse(init.body!) as { identifiers: Array<{ name: string }> };
+        return jsonResponse(200, {
+          data: body.identifiers.map((id) => collectionCardBody(id.name)),
+          not_found: [],
+        });
+      }
+      expect(url).toContain('/cards/search?q=');
+      return jsonResponse(200, {
+        data: [{ name: 'Bird', type_line: 'Token Creature — Bird', color_identity: [], layout: 'token' }],
+      });
+    });
+    const client = new ScryfallClient({ fetchFn });
+
+    const { resolved } = await resolveDecklist([tokenEntry('Bird')], client, { generateTokens: true });
+
+    expect(resolved[0].card.layout).toBe('token');
+  });
+
+  it('falls through to Scryfall when zero derived tokens match', async () => {
+    const fetchFn = derivedSetup(collectionCardBody('Squirrel', { id: 'tok-1', oracle_id: 'oracle-squirrel' }));
+    const client = new ScryfallClient({ fetchFn });
+
+    const { resolved } = await resolveDecklist(
+      [cardEntry('Source Card'), tokenEntry('Bird')],
+      client,
+      { generateTokens: true },
+    );
+
+    const birdEntries = resolved.filter((r) => r.entry.kind === 'token' && r.entry.name === 'Bird');
+    expect(birdEntries).toHaveLength(1);
+    expect(birdEntries[0].card.name).toBe('Bird');
+  });
+
+  it('falls through to Scryfall when multiple derived tokens tie', async () => {
+    const fetchFn = vi.fn<FetchLike>(async (_url, init) => {
+      if (init?.method === 'POST') {
+        const body = JSON.parse(init.body!) as { identifiers: Array<{ name?: string; id?: string }> };
+        if (body.identifiers[0].name) {
+          return jsonResponse(200, {
+            data: [
+              cardWithParts('Source Card', [
+                { id: 'tok-1', component: 'token', name: 'Bird' },
+                { id: 'tok-2', component: 'token', name: 'Bird' },
+              ]),
+            ],
+            not_found: [],
+          });
+        }
+        return jsonResponse(200, {
+          data: body.identifiers.map((id) =>
+            collectionCardBody('Bird', { id: id.id, oracle_id: `oracle-${id.id}` }),
+          ),
+          not_found: [],
+        });
+      }
+      return jsonResponse(200, {
+        data: [{ name: 'Bird', type_line: 'Token Creature — Bird', color_identity: [], layout: 'token' }],
+      });
+    });
+    const client = new ScryfallClient({ fetchFn });
+
+    const { resolved } = await resolveDecklist(
+      [cardEntry('Source Card'), tokenEntry('Bird')],
+      client,
+      { generateTokens: true },
+    );
+
+    const birdEntries = resolved.filter((r) => r.entry.kind === 'token' && r.entry.name === 'Bird');
+    expect(birdEntries.some((r) => r.card.layout === 'token')).toBe(true);
+  });
+});
+
+describe('resolveDecklist - emblem resolution unaffected by token hints', () => {
+  it('resolves emblem entries by name-based type:emblem search with no hint parsing', async () => {
+    const fetchFn = vi.fn<FetchLike>(async (url) => {
+      expect(url).toContain('type%3Aemblem');
+      return jsonResponse(200, {
+        data: [{ name: "Elspeth, Sun's Champion", type_line: 'Emblem', color_identity: [], layout: 'emblem' }],
+      });
+    });
+    const client = new ScryfallClient({ fetchFn });
+
+    const { resolved } = await resolveDecklist(
+      [{ kind: 'emblem', quantity: 1, name: "Elspeth, Sun's Champion", line: 1 }],
+      client,
+    );
+
+    expect(resolved[0].card.layout).toBe('emblem');
   });
 });
 
