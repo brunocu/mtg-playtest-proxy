@@ -289,11 +289,16 @@ function drawFaceOnto(
   } else if (!options.fullArtBasicLands) {
     drawBasicLandSymbol(ctx, layout, face);
   }
-  if ((face.power !== undefined && face.toughness !== undefined) || face.loyalty !== undefined || face.defense !== undefined) {
+  if (hasStatBox(face)) {
     drawStatBox(ctx, layout, face, strokeStyle);
   }
 
   return strokeStyle;
+}
+
+/** Whether `face` has a power/toughness, loyalty, or defense value to show in a stat box. */
+function hasStatBox(face: FaceToRender): boolean {
+  return (face.power !== undefined && face.toughness !== undefined) || face.loyalty !== undefined || face.defense !== undefined;
 }
 
 function makeCanvas(width: number, height: number, scale: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
@@ -461,7 +466,7 @@ function renderAdventureCard(
   // The secondary box fully overlaps one side of the main rules box (same height) — the left by
   // default, or the right for a prepare card — so the main face's own oracle text is confined to
   // the free area on the other side.
-  drawFaceOnto(
+  const strokeStyle = drawFaceOnto(
     ctx,
     mainLayout,
     main,
@@ -475,6 +480,12 @@ function renderAdventureCard(
   ctx.translate(secondaryLeft, secondaryTop);
   drawFaceOnto(ctx, secondaryLayout, secondary, options);
   ctx.restore();
+
+  // The mirrored (prepare) secondary box sits in the same corner as the main face's stat box, so
+  // re-draw the stat box on top once the secondary box has been composited.
+  if (mirrored && hasStatBox(main)) {
+    drawStatBox(ctx, mainLayout, main, strokeStyle);
+  }
 
   return canvas;
 }

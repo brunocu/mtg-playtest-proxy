@@ -84,7 +84,7 @@ The system SHALL render each transform, modal-double-faced-card, or reversible-c
 - **THEN** the system renders two card images, one for each side, each in the standard card layout
 
 ### Requirement: Render split, fuse, aftermath, flip, adventure, and prepare cards as one composited card
-The system SHALL render split, fuse, aftermath, flip, adventure, and prepare cards as a single card image using each layout's authentic physical composition, unconditionally (not gated by any option). Room cards SHALL be treated as split cards, and prepare cards SHALL be treated as adventure cards with the second rules box mirrored to the right side instead of the left.
+The system SHALL render split, fuse, aftermath, flip, adventure, and prepare cards as a single card image using each layout's authentic physical composition, unconditionally (not gated by any option). Room cards SHALL be treated as split cards, and prepare cards SHALL be treated as adventure cards with the second rules box mirrored to the right side instead of the left. For adventure and prepare cards, the main face's power/toughness, loyalty, or defense stat box SHALL remain fully visible and SHALL NOT be obscured by the compositing of the secondary rules box, regardless of which side the secondary box is mirrored to.
 
 #### Scenario: Split or fuse card
 - **WHEN** a resolved decklist entry is a split or fuse card
@@ -113,6 +113,10 @@ The system SHALL render split, fuse, aftermath, flip, adventure, and prepare car
 #### Scenario: Prepare card
 - **WHEN** a resolved decklist entry is a prepare card
 - **THEN** the system renders one card image with the creature's standard frame and a compact second rules box for the prepared spell below it, mirrored to the right side of the frame instead of the left
+
+#### Scenario: Prepare card stat box stays visible
+- **WHEN** a resolved decklist entry is a prepare card whose creature face has power/toughness, loyalty, or defense
+- **THEN** the rendered card image shows the creature's stat box on top of (not covered by) the mirrored secondary rules box
 
 ### Requirement: Render compound mana symbols with a diagonal-offset glyph pair
 The system SHALL render hybrid, two-hybrid, and Phyrexian mana symbols in icon mode as their two component glyphs at reduced size, diagonally offset from each other, rather than as two full-size glyphs side by side. In text-only mode these symbols SHALL continue to render as bracketed text unchanged.
